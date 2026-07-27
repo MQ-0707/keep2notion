@@ -23,4 +23,5 @@ workout_properties_type_dict = {
     "Id":RICH_TEXT,
     "名字":RICH_TEXT,
     "运动类型":RELATION,
+    "我的装备":RELATION,
 }

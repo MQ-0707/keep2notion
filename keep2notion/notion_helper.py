@@ -6,7 +6,7 @@ import time
 from notion_client import Client
 from retrying import retry
 from dotenv import load_dotenv
-from utils import (
+from keep2notion.utils import (
     format_date,
     get_date,
     get_first_and_last_day_of_month,
@@ -17,6 +17,7 @@ from utils import (
     get_relation,
     get_rich_text,
     get_title,
+    get_embed,
     timestamp_to_date,
     get_property_value,
 )
@@ -36,6 +37,8 @@ class NotionHelper:
         "YEAR_DATABASE_NAME": "年",
         "TYPE_DATABASE_NAME": "运动类型",
         "ALL_DATABASE_NAME": "全部",
+        "WEIGHT_DATABASE_NAME": "体重",
+        "EQUIPMENT_DATABASE_NAME": "我的装备",
     }
     database_id_dict = {}
     image_dict = {}
@@ -68,7 +71,13 @@ class NotionHelper:
         )        
         self.type_database_id = self.database_id_dict.get(
             self.database_name_dict.get("TYPE_DATABASE_NAME")
-        )
+        )        
+        self.weight_database_id = self.database_id_dict.get(
+            self.database_name_dict.get("WEIGHT_DATABASE_NAME")
+        )     
+        self.equipment_database_id = self.database_id_dict.get(
+            self.database_name_dict.get("EQUIPMENT_DATABASE_NAME")
+        )      
         if self.day_database_id:
             self.write_database_id(self.day_database_id)
 
@@ -99,7 +108,7 @@ class NotionHelper:
                     child.get("id")
                 )
             elif child["type"] == "embed" and child.get("embed").get("url"):
-                if child.get("embed").get("url").startswith("https://heatmap.malinkang.com/"):
+                if "heatmap" in child.get("embed").get("url"):
                     self.heatmap_block_id = child.get("id")
             # 如果子块有子块，递归调用函数
             if "has_children" in child and child["has_children"]:
@@ -117,15 +126,17 @@ class NotionHelper:
         start, end = get_first_and_last_day_of_week(date)
         properties = {"日期": get_date(format_date(start), format_date(end))}
         return self.get_relation_id(
-            week, self.week_database_id, TARGET_ICON_URL, properties
+            week, self.week_database_id, self.get_date_icon(date, "week"), properties
         )
 
     def get_month_relation_id(self, date):
-        month = date.strftime("%Y年%-m月")
+        month = date.strftime("%Y年%m月")
         start, end = get_first_and_last_day_of_month(date)
-        properties = {"日期": get_date(format_date(start), format_date(end))}
+        properties = {
+            "日期": get_date(format_date(start), format_date(end)),
+        }
         return self.get_relation_id(
-            month, self.month_database_id, TARGET_ICON_URL, properties
+            month, self.month_database_id, self.get_date_icon(date, "month"), properties
         )
 
     def get_year_relation_id(self, date):
@@ -133,32 +144,16 @@ class NotionHelper:
         start, end = get_first_and_last_day_of_year(date)
         properties = {"日期": get_date(format_date(start), format_date(end))}
         return self.get_relation_id(
-            year, self.year_database_id, TARGET_ICON_URL, properties
+            year, self.year_database_id, self.get_date_icon(date, "year"), properties
         )
 
-    def get_day_relation_id(self, date):
+
+    def get_day_relation_id(self, date, properties={}):
         new_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
         day = new_date.strftime("%Y年%m月%d日")
-        properties = {
-            "日期": get_date(format_date(date)),
-        }
-        properties["年"] = get_relation(
-            [
-                self.get_year_relation_id(new_date),
-            ]
-        )
-        properties["月"] = get_relation(
-            [
-                self.get_month_relation_id(new_date),
-            ]
-        )
-        properties["周"] = get_relation(
-            [
-                self.get_week_relation_id(new_date),
-            ]
-        )
+        properties["日期"] = get_date(format_date(date))
         return self.get_relation_id(
-            day, self.day_database_id, TARGET_ICON_URL, properties
+            day, self.day_database_id, self.get_date_icon(date, "day"), properties
         )
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
@@ -171,9 +166,14 @@ class NotionHelper:
         if len(response.get("results")) == 0:
             parent = {"database_id": id, "type": "database_id"}
             properties["标题"] = get_title(name)
-            page_id = self.client.pages.create(
-                parent=parent, properties=properties, icon=get_icon(icon)
-            ).get("id")
+            if icon in ("", None):
+                page_id = self.client.pages.create(
+                    parent=parent, properties=properties
+                ).get("id")
+            else:
+                page_id = self.client.pages.create(
+                    parent=parent, properties=properties, icon=get_icon(icon)
+                ).get("id")
         else:
             page_id = response.get("results")[0].get("id")
         self.__cache[key] = page_id
@@ -251,6 +251,9 @@ class NotionHelper:
             results.extend(response.get("results"))
         return results
 
+    def get_date_icon(self, date, type):
+        return TARGET_ICON_URL
+    
     def get_date_relation(self, properties, date):
         properties["年"] = get_relation(
             [
@@ -277,3 +280,12 @@ class NotionHelper:
                 self.get_relation_id("全部",self.all_database_id,TARGET_ICON_URL),
             ]
         )
+    def search_heatmap(self, block_id):
+        children = self.client.blocks.children.list(block_id=block_id)["results"]
+        # 遍历子块
+        for child in children:
+            # 检查子块的类型
+            if child["type"] == "embed" and child.get("embed").get("url"):
+                url =  child.get("embed").get("url")
+                if "heatmap" in url:
+                    return child.get("id")
